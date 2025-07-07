@@ -2,20 +2,21 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Visual PDF Cropper</title>
+<title>Responsive PDF Cropper</title>
 <style>
   body {
     font-family: Arial, sans-serif;
     text-align: center;
-    margin: 20px;
+    margin: 10px;
   }
-  canvas {
+  #pdfCanvas {
+    width: 100%;
+    height: auto;
     border: 1px solid #ccc;
-    margin-top: 10px;
-    cursor: crosshair;
+    touch-action: none;
   }
   #cropBtn {
-    margin-top: 20px;
+    margin-top: 15px;
     padding: 10px 20px;
     background: #4CAF50;
     color: white;
@@ -27,16 +28,14 @@
 </head>
 <body>
 
-<h2>Visual PDF Cropper</h2>
+<h2>PDF Cropper (Mobile-Friendly)</h2>
 <input type="file" id="pdfFile" accept="application/pdf">
 <br><br>
 <canvas id="pdfCanvas"></canvas>
 <br>
 <button id="cropBtn">Crop & Download</button>
 
-<!-- PDF.js Library -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<!-- PDF-lib Library -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 
 <script>
@@ -46,6 +45,7 @@ const ctx = canvas.getContext('2d');
 let pdfDoc, page, viewport;
 let isDrawing = false;
 let cropRect = { x: 50, y: 50, width: 100, height: 100 };
+let scaleFactor = 1;
 
 fileInput.addEventListener('change', async () => {
   const file = fileInput.files[0];
@@ -57,12 +57,17 @@ fileInput.addEventListener('change', async () => {
   page = await pdfDoc.getPage(1);
 
   viewport = page.getViewport({ scale: 1.5 });
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
+  
+  // Scale canvas to fit screen width
+  const screenWidth = window.innerWidth - 20;
+  scaleFactor = screenWidth / viewport.width;
+  
+  canvas.width = viewport.width * scaleFactor;
+  canvas.height = viewport.height * scaleFactor;
 
   const renderContext = {
     canvasContext: ctx,
-    viewport: viewport
+    viewport: page.getViewport({ scale: 1.5 * scaleFactor })
   };
   await page.render(renderContext).promise;
 
@@ -75,27 +80,59 @@ function drawCropRect() {
   ctx.strokeRect(cropRect.x, cropRect.y, cropRect.width, cropRect.height);
 }
 
-canvas.addEventListener('mousedown', (e) => {
+function getCanvasPos(e) {
   const rect = canvas.getBoundingClientRect();
-  cropRect.x = e.clientX - rect.left;
-  cropRect.y = e.clientY - rect.top;
+  if (e.touches) {
+    return {
+      x: e.touches[0].clientX - rect.left,
+      y: e.touches[0].clientY - rect.top
+    };
+  } else {
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    };
+  }
+}
+
+// Mouse & Touch Events
+canvas.addEventListener('mousedown', startDraw);
+canvas.addEventListener('mousemove', draw);
+canvas.addEventListener('mouseup', stopDraw);
+
+canvas.addEventListener('touchstart', startDraw);
+canvas.addEventListener('touchmove', draw);
+canvas.addEventListener('touchend', stopDraw);
+
+function startDraw(e) {
+  e.preventDefault();
+  const pos = getCanvasPos(e);
+  cropRect.x = pos.x;
+  cropRect.y = pos.y;
+  cropRect.width = 0;
+  cropRect.height = 0;
   isDrawing = true;
-});
+}
 
-canvas.addEventListener('mousemove', (e) => {
+function draw(e) {
   if (!isDrawing) return;
-  const rect = canvas.getBoundingClientRect();
-  cropRect.width = (e.clientX - rect.left) - cropRect.x;
-  cropRect.height = (e.clientY - rect.top) - cropRect.y;
+  e.preventDefault();
+  const pos = getCanvasPos(e);
+  cropRect.width = pos.x - cropRect.x;
+  cropRect.height = pos.y - cropRect.y;
 
-  page.render({ canvasContext: ctx, viewport: viewport }).promise.then(() => {
+  page.render({ 
+    canvasContext: ctx, 
+    viewport: page.getViewport({ scale: 1.5 * scaleFactor }) 
+  }).promise.then(() => {
     drawCropRect();
   });
-});
+}
 
-canvas.addEventListener('mouseup', () => {
+function stopDraw(e) {
+  e.preventDefault();
   isDrawing = false;
-});
+}
 
 document.getElementById('cropBtn').addEventListener('click', async () => {
   if (!pdfDoc) return;
@@ -104,10 +141,10 @@ document.getElementById('cropBtn').addEventListener('click', async () => {
   const pdfDocLib = await PDFLib.PDFDocument.load(originalPDFBytes);
   const pdfPage = pdfDocLib.getPage(0);
 
-  const cropX = cropRect.x / viewport.scale;
-  const cropY = (canvas.height - cropRect.y - cropRect.height) / viewport.scale;
-  const cropWidth = cropRect.width / viewport.scale;
-  const cropHeight = cropRect.height / viewport.scale;
+  const cropX = cropRect.x / scaleFactor / 1.5;
+  const cropY = (canvas.height / scaleFactor / 1.5 - cropRect.y - cropRect.height) / scaleFactor / 1.5;
+  const cropWidth = cropRect.width / scaleFactor / 1.5;
+  const cropHeight = cropRect.height / scaleFactor / 1.5;
 
   pdfPage.setCropBox(cropX, cropY, cropWidth, cropHeight);
 
