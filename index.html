@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Visual PDF Cropper</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    text-align: center;
+    margin: 20px;
+  }
+  canvas {
+    border: 1px solid #ccc;
+    margin-top: 10px;
+    cursor: crosshair;
+  }
+  #cropBtn {
+    margin-top: 20px;
+    padding: 10px 20px;
+    background: #4CAF50;
+    color: white;
+    border: none;
+    cursor: pointer;
+    border-radius: 5px;
+  }
+</style>
+</head>
+<body>
+
+<h2>Visual PDF Cropper</h2>
+<input type="file" id="pdfFile" accept="application/pdf">
+<br><br>
+<canvas id="pdfCanvas"></canvas>
+<br>
+<button id="cropBtn">Crop & Download</button>
+
+<!-- PDF.js Library -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- PDF-lib Library -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+
+<script>
+const fileInput = document.getElementById('pdfFile');
+const canvas = document.getElementById('pdfCanvas');
+const ctx = canvas.getContext('2d');
+let pdfDoc, page, viewport;
+let isDrawing = false;
+let cropRect = { x: 50, y: 50, width: 100, height: 100 };
+
+fileInput.addEventListener('change', async () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+
+  const arrayBuffer = await file.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+  pdfDoc = await loadingTask.promise;
+  page = await pdfDoc.getPage(1);
+
+  viewport = page.getViewport({ scale: 1.5 });
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+
+  const renderContext = {
+    canvasContext: ctx,
+    viewport: viewport
+  };
+  await page.render(renderContext).promise;
+
+  drawCropRect();
+});
+
+function drawCropRect() {
+  ctx.strokeStyle = 'red';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(cropRect.x, cropRect.y, cropRect.width, cropRect.height);
+}
+
+canvas.addEventListener('mousedown', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  cropRect.x = e.clientX - rect.left;
+  cropRect.y = e.clientY - rect.top;
+  isDrawing = true;
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  if (!isDrawing) return;
+  const rect = canvas.getBoundingClientRect();
+  cropRect.width = (e.clientX - rect.left) - cropRect.x;
+  cropRect.height = (e.clientY - rect.top) - cropRect.y;
+
+  page.render({ canvasContext: ctx, viewport: viewport }).promise.then(() => {
+    drawCropRect();
+  });
+});
+
+canvas.addEventListener('mouseup', () => {
+  isDrawing = false;
+});
+
+document.getElementById('cropBtn').addEventListener('click', async () => {
+  if (!pdfDoc) return;
+
+  const originalPDFBytes = await fileInput.files[0].arrayBuffer();
+  const pdfDocLib = await PDFLib.PDFDocument.load(originalPDFBytes);
+  const pdfPage = pdfDocLib.getPage(0);
+
+  const cropX = cropRect.x / viewport.scale;
+  const cropY = (canvas.height - cropRect.y - cropRect.height) / viewport.scale;
+  const cropWidth = cropRect.width / viewport.scale;
+  const cropHeight = cropRect.height / viewport.scale;
+
+  pdfPage.setCropBox(cropX, cropY, cropWidth, cropHeight);
+
+  const croppedPDF = await pdfDocLib.save();
+  const blob = new Blob([croppedPDF], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'cropped.pdf';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+</script>
+
+</body>
+</html>
