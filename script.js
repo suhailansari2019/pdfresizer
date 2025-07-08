@@ -327,10 +327,9 @@ function updateProgress(percent) {
 }
 
 function showStatus(message, type) {
-    statusMessage.textContent = message;
-    statusMessage.style.color = type === 'error' ? var(--error-color) : 
-                              type === 'success' ? var(--secondary-color) : 
-                              var(--dark-gray);
+   statusMessage.style.color = type === 'error' ? getComputedStyle(document.documentElement).getPropertyValue('--error-color') : 
+                          type === 'success' ? getComputedStyle(document.documentElement).getPropertyValue('--secondary-color') : 
+                          getComputedStyle(document.documentElement).getPropertyValue('--dark-gray');
 }
 
 // Initialize controls
