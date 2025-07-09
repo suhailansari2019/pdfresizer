@@ -1,51 +1,146 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF Cropper</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.12.313/pdf.min.js"></script>
-    <style>
-        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-        .container { display: flex; flex-direction: column; gap: 20px; }
-        #pdf-viewer { border: 1px solid #ccc; margin-top: 10px; }
-        #crop-canvas { border: 1px dashed red; cursor: move; }
-        .controls { display: flex; gap: 10px; margin-bottom: 10px; }
-        button { padding: 8px 16px; cursor: pointer; }
-        .drop-zone { 
-            border: 2px dashed #ccc; padding: 20px; text-align: center;
-            margin-bottom: 20px; cursor: pointer;
-        }
-        .drop-zone.active { border-color: #4CAF50; }
-    </style>
+  <meta charset="UTF-8">
+  <title>PDF Crop Tool</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    canvas { border: 1px solid #ccc; cursor: crosshair; }
+    #crop-area {
+      border: 2px dashed red;
+      position: absolute;
+      pointer-events: none;
+      display: none;
+    }
+    #pdf-container {
+      position: relative;
+      display: inline-block;
+    }
+    button, input[type="file"] {
+      margin-top: 10px;
+      padding: 8px 12px;
+      font-size: 16px;
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>PDF Cropper</h1>
-        <div id="drop-zone" class="drop-zone">
-            <p>Drag & drop PDF file here or click to browse</p>
-            <input type="file" id="file-input" accept=".pdf" style="display: none;">
-        </div>
-        
-        <div class="controls">
-            <button id="crop-btn" disabled>Apply Crop</button>
-            <button id="download-btn" disabled>Download Cropped PDF</button>
-            <button id="reset-btn" disabled>Reset</button>
-        </div>
-        
-        <div id="pdf-container">
-            <canvas id="pdf-viewer"></canvas>
-            <canvas id="crop-canvas" style="display: none; position: absolute;"></canvas>
-        </div>
-        
-        <div class="crop-controls" style="display: none;">
-            <label>Left: <input type="number" id="crop-left" min="0" value="0"></label>
-            <label>Top: <input type="number" id="crop-top" min="0" value="0"></label>
-            <label>Width: <input type="number" id="crop-width" min="1" value="100"></label>
-            <label>Height: <input type="number" id="crop-height" min="1" value="100"></label>
-        </div>
-    </div>
 
-    <script src="app.js"></script>
+<h2>PDF Crop Tool</h2>
+
+<input type="file" id="pdf-upload" accept="application/pdf">
+<div id="pdf-container">
+  <canvas id="pdf-canvas"></canvas>
+  <div id="crop-area"></div>
+</div>
+<br>
+<button id="crop-btn">Crop & Download</button>
+
+<!-- PDF.js library -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
+<!-- html2canvas to export cropped region -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+<script>
+  const fileInput = document.getElementById('pdf-upload');
+  const canvas = document.getElementById('pdf-canvas');
+  const ctx = canvas.getContext('2d');
+  const cropArea = document.getElementById('crop-area');
+  const pdfContainer = document.getElementById('pdf-container');
+
+  let pdf = null;
+  let startX, startY, endX, endY;
+  let isDragging = false;
+
+  // Load PDF
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fileReader = new FileReader();
+
+    fileReader.onload = function() {
+      const typedarray = new Uint8Array(this.result);
+      pdfjsLib.getDocument(typedarray).promise.then(doc => {
+        pdf = doc;
+        renderPage(1);
+      });
+    };
+
+    fileReader.readAsArrayBuffer(file);
+  });
+
+  function renderPage(num) {
+    pdf.getPage(num).then(page => {
+      const viewport = page.getViewport({ scale: 1.5 });
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const renderContext = {
+        canvasContext: ctx,
+        viewport: viewport
+      };
+      page.render(renderContext);
+    });
+  }
+
+  // Mouse Events for cropping
+  canvas.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    const rect = canvas.getBoundingClientRect();
+    startX = e.clientX - rect.left;
+    startY = e.clientY - rect.top;
+    cropArea.style.left = startX + 'px';
+    cropArea.style.top = startY + 'px';
+    cropArea.style.width = '0px';
+    cropArea.style.height = '0px';
+    cropArea.style.display = 'block';
+  });
+
+  canvas.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const rect = canvas.getBoundingClientRect();
+    endX = e.clientX - rect.left;
+    endY = e.clientY - rect.top;
+
+    const width = endX - startX;
+    const height = endY - startY;
+
+    cropArea.style.left = (width < 0 ? endX : startX) + 'px';
+    cropArea.style.top = (height < 0 ? endY : startY) + 'px';
+    cropArea.style.width = Math.abs(width) + 'px';
+    cropArea.style.height = Math.abs(height) + 'px';
+  });
+
+  canvas.addEventListener('mouseup', () => {
+    isDragging = false;
+  });
+
+  // Crop and Download
+  document.getElementById('crop-btn').addEventListener('click', () => {
+    if (!pdf) return;
+
+    const rect = cropArea.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+
+    const sx = rect.left - canvasRect.left;
+    const sy = rect.top - canvasRect.top;
+    const sw = rect.width;
+    const sh = rect.height;
+
+    const tempCanvas = document.createElement('canvas');
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCanvas.width = sw;
+    tempCanvas.height = sh;
+
+    tempCtx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+
+    const croppedImage = tempCanvas.toDataURL('image/png');
+
+    // Download
+    const link = document.createElement('a');
+    link.href = croppedImage;
+    link.download = 'cropped.png';
+    link.click();
+  });
+</script>
+
 </body>
 </html>
