@@ -1,146 +1,347 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>PDF Crop Tool</title>
-  <style>
-    body { font-family: sans-serif; margin: 20px; }
-    canvas { border: 1px solid #ccc; cursor: crosshair; }
-    #crop-area {
-      border: 2px dashed red;
-      position: absolute;
-      pointer-events: none;
-      display: none;
-    }
-    #pdf-container {
-      position: relative;
-      display: inline-block;
-    }
-    button, input[type="file"] {
-      margin-top: 10px;
-      padding: 8px 12px;
-      font-size: 16px;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Resizer & Crop Tool</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .pdf-crop-container {
+            position: relative;
+            display: inline-block;
+            margin: 0 auto;
+            background: #f5f5f5;
+        }
+        #pdfCanvas {
+            display: block;
+            background: #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .crop-rect {
+            position: absolute;
+            border: 2px dashed #0078d7;
+            background: rgba(0,120,215,0.1);
+            cursor: move;
+            box-sizing: border-box;
+        }
+        .crop-handle {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background: #fff;
+            border: 2px solid #0078d7;
+            border-radius: 50%;
+            cursor: pointer;
+            z-index: 2;
+        }
+        .crop-handle.nw { top: -7px; left: -7px; cursor: nwse-resize; }
+        .crop-handle.ne { top: -7px; right: -7px; cursor: nesw-resize; }
+        .crop-handle.sw { bottom: -7px; left: -7px; cursor: nesw-resize; }
+        .crop-handle.se { bottom: -7px; right: -7px; cursor: nwse-resize; }
+        .hidden { display: none !important; }
+        .center { text-align: center; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
+    <div class="container">
+        <h1>PDF Crop Tool</h1>
+        <div class="upload-section center">
+            <label for="pdfInput" class="upload-btn">
+                Choose PDF File
+                <input type="file" id="pdfInput" accept=".pdf" style="display: none;">
+            </label>
+            <span id="fileInfo">No file selected</span>
+        </div>
+        <div class="center">
+            <button id="processBtn" class="process-btn hidden">Crop & Download PDF</button>
+        </div>
+        <div class="center">
+            <div class="pdf-crop-container hidden" id="pdfCropContainer">
+                <canvas id="pdfCanvas"></canvas>
+                <div id="cropRect" class="crop-rect hidden">
+                    <div class="crop-handle nw"></div>
+                    <div class="crop-handle ne"></div>
+                    <div class="crop-handle sw"></div>
+                    <div class="crop-handle se"></div>
+                </div>
+            </div>
+        </div>
+        <div class="center">
+            <div class="preview-controls hidden" id="previewControls">
+                <button id="prevPage" class="nav-btn">Previous</button>
+                <span id="pageInfo">Page 1 of 1</span>
+                <button id="nextPage" class="nav-btn">Next</button>
+            </div>
+        </div>
+        <div class="status center">
+            <div id="statusMessage"></div>
+        </div>
+    </div>
+    <script>
+    // Wait for DOM to be fully loaded
+    window.addEventListener('DOMContentLoaded', function() {
+    // PDF.js worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.worker.min.js';
 
-<h2>PDF Crop Tool</h2>
+    let pdfDoc = null, pageNum = 1, totalPages = 1, scale = 1.5;
+    let cropRect = { x: 50, y: 50, w: 200, h: 200 };
+    let dragging = false, resizing = false, dragOffset = {}, resizeDir = '';
+    let pageViewport = null, pageWidth = 0, pageHeight = 0;
+    let cropRectEl = document.getElementById('cropRect');
+    let pdfCanvas = document.getElementById('pdfCanvas');
+    let ctx = pdfCanvas.getContext('2d');
+    let pdfInput = document.getElementById('pdfInput');
+    let fileInfo = document.getElementById('fileInfo');
+    let processBtn = document.getElementById('processBtn');
+    let pdfCropContainer = document.getElementById('pdfCropContainer');
+    let previewControls = document.getElementById('previewControls');
+    let pageInfo = document.getElementById('pageInfo');
+    let prevPage = document.getElementById('prevPage');
+    let nextPage = document.getElementById('nextPage');
+    let statusMessage = document.getElementById('statusMessage');
+    let pdfFileBuffer = null;
 
-<input type="file" id="pdf-upload" accept="application/pdf">
-<div id="pdf-container">
-  <canvas id="pdf-canvas"></canvas>
-  <div id="crop-area"></div>
-</div>
-<br>
-<button id="crop-btn">Crop & Download</button>
+    function showStatus(msg) {
+        statusMessage.textContent = msg;
+    }
 
-<!-- PDF.js library -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
-<!-- html2canvas to export cropped region -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-
-<script>
-  const fileInput = document.getElementById('pdf-upload');
-  const canvas = document.getElementById('pdf-canvas');
-  const ctx = canvas.getContext('2d');
-  const cropArea = document.getElementById('crop-area');
-  const pdfContainer = document.getElementById('pdf-container');
-
-  let pdf = null;
-  let startX, startY, endX, endY;
-  let isDragging = false;
-
-  // Load PDF
-  fileInput.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const fileReader = new FileReader();
-
-    fileReader.onload = function() {
-      const typedarray = new Uint8Array(this.result);
-      pdfjsLib.getDocument(typedarray).promise.then(doc => {
-        pdf = doc;
-        renderPage(1);
-      });
-    };
-
-    fileReader.readAsArrayBuffer(file);
-  });
-
-  function renderPage(num) {
-    pdf.getPage(num).then(page => {
-      const viewport = page.getViewport({ scale: 1.5 });
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const renderContext = {
-        canvasContext: ctx,
-        viewport: viewport
-      };
-      page.render(renderContext);
+    pdfInput.addEventListener('change', async function(e) {
+        let file = e.target.files[0];
+        if (!file) return;
+        fileInfo.textContent = file.name;
+        pdfFileBuffer = await file.arrayBuffer();
+        loadPDF(pdfFileBuffer);
     });
-  }
 
-  // Mouse Events for cropping
-  canvas.addEventListener('mousedown', (e) => {
-    isDragging = true;
-    const rect = canvas.getBoundingClientRect();
-    startX = e.clientX - rect.left;
-    startY = e.clientY - rect.top;
-    cropArea.style.left = startX + 'px';
-    cropArea.style.top = startY + 'px';
-    cropArea.style.width = '0px';
-    cropArea.style.height = '0px';
-    cropArea.style.display = 'block';
-  });
+    async function loadPDF(buffer) {
+        showStatus('Loading PDF...');
+        pdfDoc = await pdfjsLib.getDocument({data: buffer}).promise;
+        totalPages = pdfDoc.numPages;
+        pageNum = 1;
+        // Set cropRect to default only when loading a new PDF
+        cropRect = {
+            x: 50,
+            y: 50,
+            w: 200,
+            h: 200
+        };
+        showStatus('');
+        renderPage(pageNum);
+        pdfCropContainer.classList.remove('hidden');
+        processBtn.classList.remove('hidden');
+        previewControls.classList.toggle('hidden', totalPages === 1);
+        updatePageInfo();
+    }
 
-  canvas.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    const rect = canvas.getBoundingClientRect();
-    endX = e.clientX - rect.left;
-    endY = e.clientY - rect.top;
+    async function renderPage(num) {
+        showStatus('Rendering page...');
+        let page = await pdfDoc.getPage(num);
+        pageViewport = page.getViewport({ scale });
+        pageWidth = pageViewport.width;
+        pageHeight = pageViewport.height;
+        pdfCanvas.width = pageWidth;
+        pdfCanvas.height = pageHeight;
+        pdfCropContainer.style.width = pageWidth + 'px';
+        pdfCropContainer.style.height = pageHeight + 'px';
 
-    const width = endX - startX;
-    const height = endY - startY;
+        // Do NOT reset cropRect here; keep user's selection
 
-    cropArea.style.left = (width < 0 ? endX : startX) + 'px';
-    cropArea.style.top = (height < 0 ? endY : startY) + 'px';
-    cropArea.style.width = Math.abs(width) + 'px';
-    cropArea.style.height = Math.abs(height) + 'px';
-  });
+        await page.render({
+            canvasContext: ctx,
+            viewport: pageViewport
+        }).promise;
 
-  canvas.addEventListener('mouseup', () => {
-    isDragging = false;
-  });
+        updateCropRectUI();
+        cropRectEl.classList.remove('hidden');
+        showStatus('');
+    }
 
-  // Crop and Download
-  document.getElementById('crop-btn').addEventListener('click', () => {
-    if (!pdf) return;
+    function updateCropRectUI() {
+        cropRectEl.style.left = cropRect.x + 'px';
+        cropRectEl.style.top = cropRect.y + 'px';
+        cropRectEl.style.width = cropRect.w + 'px';
+        cropRectEl.style.height = cropRect.h + 'px';
+    }
 
-    const rect = cropArea.getBoundingClientRect();
-    const canvasRect = canvas.getBoundingClientRect();
+    // Drag and resize logic
+    cropRectEl.addEventListener('mousedown', function(e) {
+        if (e.target.classList.contains('crop-handle')) {
+            resizing = true;
+            resizeDir = e.target.classList[1];
+            dragOffset = {
+                x: e.clientX,
+                y: e.clientY,
+                orig: {...cropRect}
+            };
+        } else {
+            dragging = true;
+            dragOffset = {
+                x: e.clientX - cropRect.x,
+                y: e.clientY - cropRect.y
+            };
+        }
+        e.preventDefault();
+    });
 
-    const sx = rect.left - canvasRect.left;
-    const sy = rect.top - canvasRect.top;
-    const sw = rect.width;
-    const sh = rect.height;
+    document.addEventListener('mousemove', function(e) {
+        if (dragging) {
+            let nx = e.clientX - dragOffset.x;
+            let ny = e.clientY - dragOffset.y;
+            nx = Math.max(0, Math.min(nx, pageWidth - cropRect.w));
+            ny = Math.max(0, Math.min(ny, pageHeight - cropRect.h));
+            cropRect.x = nx;
+            cropRect.y = ny;
+            updateCropRectUI();
+        } else if (resizing) {
+            let dx = e.clientX - dragOffset.x;
+            let dy = e.clientY - dragOffset.y;
+            let orig = dragOffset.orig;
+            if (resizeDir === 'nw') {
+                let nx = Math.max(0, orig.x + dx);
+                let ny = Math.max(0, orig.y + dy);
+                let nw = orig.w - dx;
+                let nh = orig.h - dy;
+                if (nw > 20 && nh > 20 && nx >= 0 && ny >= 0) {
+                    cropRect.x = nx;
+                    cropRect.y = ny;
+                    cropRect.w = nw;
+                    cropRect.h = nh;
+                }
+            } else if (resizeDir === 'ne') {
+                let ny = Math.max(0, orig.y + dy);
+                let nw = orig.w + dx;
+                let nh = orig.h - dy;
+                if (nw > 20 && nh > 20 && ny >= 0 && cropRect.x + nw <= pageWidth) {
+                    cropRect.y = ny;
+                    cropRect.w = nw;
+                    cropRect.h = nh;
+                }
+            } else if (resizeDir === 'sw') {
+                let nx = Math.max(0, orig.x + dx);
+                let nw = orig.w - dx;
+                let nh = orig.h + dy;
+                if (nw > 20 && nh > 20 && nx >= 0 && cropRect.y + nh <= pageHeight) {
+                    cropRect.x = nx;
+                    cropRect.w = nw;
+                    cropRect.h = nh;
+                }
+            } else if (resizeDir === 'se') {
+                let nw = orig.w + dx;
+                let nh = orig.h + dy;
+                if (nw > 20 && nh > 20 && cropRect.x + nw <= pageWidth && cropRect.y + nh <= pageHeight) {
+                    cropRect.w = nw;
+                    cropRect.h = nh;
+                }
+            }
+            updateCropRectUI();
+        }
+    });
 
-    const tempCanvas = document.createElement('canvas');
-    const tempCtx = tempCanvas.getContext('2d');
-    tempCanvas.width = sw;
-    tempCanvas.height = sh;
+    document.addEventListener('mouseup', function() {
+        dragging = false;
+        resizing = false;
+    });
 
-    tempCtx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+    // Navigation
+    prevPage.addEventListener('click', function() {
+        if (pageNum <= 1) return;
+        pageNum--;
+        renderPage(pageNum);
+        updatePageInfo();
+    });
+    nextPage.addEventListener('click', function() {
+        if (pageNum >= totalPages) return;
+        pageNum++;
+        renderPage(pageNum);
+        updatePageInfo();
+    });
+    // Crop & Download
+    processBtn.addEventListener('click', async function() {
+        showStatus('Processing...');
+        const { jsPDF } = window.jspdf;
+        // A4 size in points: 595.28 x 841.89 (portrait)
+        const a4Width = 595.28;
+        const a4Height = 841.89;
+        let pdf = new jsPDF({
+            unit: 'pt',
+            format: 'a4'
+        });
 
-    const croppedImage = tempCanvas.toDataURL('image/png');
+        // Use the cropRect as selected on the current page
+        // Get cropRect in display (canvas) coordinates
+        let selectedCropRect = { ...cropRect };
 
-    // Download
-    const link = document.createElement('a');
-    link.href = croppedImage;
-    link.download = 'cropped.png';
-    link.click();
-  });
-</script>
+        for (let i = 1; i <= totalPages; i++) {
+            let page = await pdfDoc.getPage(i);
+            let viewport = page.getViewport({ scale });
+            let tempCanvas = document.createElement('canvas');
+            tempCanvas.width = viewport.width;
+            tempCanvas.height = viewport.height;
+            await page.render({
+                canvasContext: tempCanvas.getContext('2d'),
+                viewport: viewport
+            }).promise;
 
+            // Map cropRect from canvas (display) coordinates to PDF (rendered) coordinates
+            let scaleX = viewport.width / pdfCanvas.width;
+            let scaleY = viewport.height / pdfCanvas.height;
+            let sx = Math.round(selectedCropRect.x * scaleX);
+            let sy = Math.round(selectedCropRect.y * scaleY);
+            let sw = Math.round(selectedCropRect.w * scaleX);
+            let sh = Math.round(selectedCropRect.h * scaleY);
+
+            let cropped = document.createElement('canvas');
+            cropped.width = sw;
+            cropped.height = sh;
+            let croppedCtx = cropped.getContext('2d');
+            croppedCtx.drawImage(tempCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+
+            let imgData = cropped.toDataURL('image/jpeg', 1.0);
+
+            // Calculate scaling to fit crop area into A4 while preserving aspect ratio
+            let scaleA4 = Math.min(a4Width / sw, a4Height / sh);
+            let imgWidth = sw * scaleA4;
+            let imgHeight = sh * scaleA4;
+            let x = (a4Width - imgWidth) / 2;
+            let y = (a4Height - imgHeight) / 2;
+
+            if (i > 1) pdf.addPage('a4');
+            pdf.setPage(i);
+            pdf.addImage(imgData, 'JPEG', x, y, imgWidth, imgHeight);
+        }
+        showStatus('');
+        pdf.save('cropped.pdf');
+        showStatus('');
+    });
+        showStatus('');
+        pdf.save('cropped.pdf');
+        showStatus('');
+    });
+
+    // Update page info display
+    function updatePageInfo() {
+        pageInfo.textContent = `Page ${pageNum} of ${totalPages}`;
+    }
+
+    // Show handles
+    function addHandles() {
+        ['nw','ne','sw','se'].forEach(dir => {
+            let handle = cropRectEl.querySelector('.' + dir);
+            if (!handle) {
+                handle = document.createElement('div');
+                handle.className = 'crop-handle ' + dir;
+                cropRectEl.appendChild(handle);
+            }
+        });
+    }
+    addHandles();
+
+    // Initial state
+    cropRectEl.classList.add('hidden');
+    pdfCropContainer.classList.add('hidden');
+    });
+    </script>
 </body>
 </html>
